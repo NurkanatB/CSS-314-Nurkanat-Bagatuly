@@ -1,0 +1,29 @@
+Task 1
+7 14
+
+Task 2
+The loop does total = numbers[i]
+Fixed: total =+ numbers[i]
+
+Task 3
+10*10=100 prints
+1000*1000=1000000 prints
+10*1000000=10000000 prints 
+
+Task 4
+A variant is faster but if array is small B is faster 
+If n=1000000 A is gonna do 1 million operations and B is gonna do too many ops around 5*10^11
+
+Task 5
+Fastest→slowest growth: 2ⁿ > n² > n log₂n > n > log₂n > 1. 2ⁿ and n² become problematic quickly as n grows large.
+
+Task 6
+Unsorted: I'll do linear scan check each element until found 45
+Sorted: binary search — check the middle, discard half, repeat (O(log n)). Binary search is faster because each comparison eliminates half the remaining data instead of just one item.
+
+Task 7
+I'm gonna scan all integers once and while it only save max value so i don't need to store all 500M
+read chunk->update max->discard
+
+Task 8
+hash map
