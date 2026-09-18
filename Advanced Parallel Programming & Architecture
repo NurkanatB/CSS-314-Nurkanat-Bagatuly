@@ -1,0 +1,62 @@
+Task 1
+PycharmProjects\PythonProject\task1_amdahl.py 
+OS Reported Logical Cores: 12
+Single Process Baseline Time T(1): 5.4631s
+
+Cores | Time(s) | Observed Speedup | Theoretical Linear
+-------------------------------------------------------
+    1 |  3.6045 |             1.52x |               1.00x
+    2 |  2.4696 |             2.21x |               2.00x
+    4 |  1.6686 |             3.27x |               4.00x
+    8 |  1.7789 |             3.07x |               8.00x
+   12 |  2.1166 |             2.58x |              12.00x
+   16 |  2.3817 |             2.29x |              16.00x
+
+Process finished with exit code 0
+
+Q1)
+Based on my measurements, the inflection point is at 4 worker processes. Up to 4 workers, the execution time decreases from 5.4631 s to 1.6686 s, and the speedup reaches 3.27x.
+
+After 4 workers, the scaling starts to degrade. With 8 workers the time increases to 1.7789 s, and with 12 and 16 workers it increases further to 2.1166 s and 2.3817 s. My system reports 12 logical CPU cores, so using more processes than the available physical resources creates additional process scheduling and CPU resource contention. The result shows that for this workload, adding more workers after 4 does not improve performance.
+
+Q2)
+From my measurements:
+
+T(1) = 5.4631 s
+
+T(4) = 1.6686 s
+
+Therefore:
+
+S(4) = T(1) / T(4) = 5.4631 / 1.6686 = 3.2741
+
+Using Amdahl's Law:
+
+3.2741 = 1 / [(1 - P) + P/4]
+
+Taking the inverse:
+
+1/3.2741 = (1 - P) + P/4
+
+0.30543 = 1 - 0.75P
+
+0.75P = 0.69457
+
+P = 0.9261
+
+So, the measured parallel fraction of the workload is approximately 92.61%. The remaining part is about 7.39%, which cannot be effectively parallelized.
+
+Q3)
+Using the parallel fraction calculated in Q1.2:
+
+P = 0.9261
+
+The asymptotic speedup limit is:
+
+S_max = 1 / (1 - P)
+
+S_max = 1 / (1 - 0.9261)
+
+S_max ≈ 13.53x
+
+This means that even if I run this workload on a 128-core server, the theoretical speedup cannot grow beyond about 13.53x according to the measured Amdahl model. The serial part of the program limits the maximum performance, so simply adding more CPU cores would not give proportional speedup.
