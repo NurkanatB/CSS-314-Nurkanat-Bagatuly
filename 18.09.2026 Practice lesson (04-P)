@@ -1,0 +1,279 @@
+# Phantom Bug lab - threads + Monte Carlo pi
+
+Two files:
+
+- `MonteCarloPi.java` - parts 1 and 2, one file, pick a mode:
+  - `race` - part 1, the bug (`totalHits++` with no sync)
+  - `sync` - part 2, fixed with `synchronized`
+  - `atomic` - part 2, fixed with `AtomicLong`
+  - `reduction` - part 3, each thread keeps its own local counter
+  - `single` - just one thread, for comparison
+- `Benchmark.java` - runs the reduction version for T = 1, 2, 4, 8, 16, 32 threads and prints the runtime/speedup/efficiency table.
+
+## How to run
+
+Didn't have a compiler handy, so just:
+
+```bash
+java MonteCarloPi.java race 4 50000000
+java MonteCarloPi.java sync 4 50000000
+java MonteCarloPi.java atomic 4 50000000
+java MonteCarloPi.java single 1 50000000
+java MonteCarloPi.java reduction 8 100000000
+
+java Benchmark.java 100000000
+```
+
+If you have `javac`: `javac *.java` then `java MonteCarloPi ...` works too.
+
+For part 1 just run it 5 times and write down what you get (it jumps around, not the same every time).
+
+Note: I ran this on a machine with only 1 core, so the bug barely showed up (pi came out fine anyway). On a real multi-core computer it should actually break, since the threads really run at the same time and step on each other. If you still don't see it on your machine, try a bigger totalPoints number.
+
+## Answers
+
+**1. Why isn't 16 threads 2x faster than 8 on an 8-core CPU?**
+Because there are only 8 real cores. Extra threads just share those same cores (hyperthreading or plain OS context switching), no new compute shows up, just switching overhead. Also some work stays serial no matter what (starting threads, joining, adding up the totals at the end), and that fixed part matters more once the parallel part gets smaller.
+
+**2. Why is the synchronized version slower than single-threaded?**
+Because almost every hit, a thread has to lock the same variable. All the cores end up fighting over the same bit of memory (bouncing it between caches), which costs way more than just doing the math. So basically all the time goes to fighting over memory instead of computing, making it worse than one thread with zero coordination. Part 3 fixes this by not sharing anything until the very end.
+
+
+
+
+import java.util.concurrent.ThreadLocalRandom;
+
+public class Benchmark {
+
+    public static void main(String[] args) throws InterruptedException {
+        long totalPoints = args.length > 0 ? Long.parseLong(args[0]) : 100_000_000L;
+        int[] threadCounts = {1, 2, 4, 8, 16, 32};
+
+        System.out.println("Warming up JIT...");
+        runReduction(4, 2_000_000L);
+        runReduction(4, 2_000_000L);
+
+        long[] times = new long[threadCounts.length];
+
+        for (int i = 0; i < threadCounts.length; i++) {
+            int t = threadCounts[i];
+            long start = System.nanoTime();
+            double pi = runReduction(t, totalPoints);
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            times[i] = elapsedMs;
+            System.out.printf("T=%-3d  runtime=%-8dms  pi~=%.5f%n", t, elapsedMs, pi);
+        }
+
+        long baseline = times[0];
+
+        System.out.println();
+        System.out.println("| Threads (T) | Runtime (ms) | Speedup (T1/TN) | Efficiency (Speedup/T) |");
+        System.out.println("|---|---|---|---|");
+        for (int i = 0; i < threadCounts.length; i++) {
+            int t = threadCounts[i];
+            double speedup = (double) baseline / times[i];
+            double efficiency = speedup / t * 100.0;
+            System.out.printf("| %d | %d | %.2fx | %.1f%% |%n", t, times[i], speedup, efficiency);
+        }
+    }
+
+    static double runReduction(int numThreads, long totalPoints) throws InterruptedException {
+        long pointsPerThread = totalPoints / numThreads;
+        Thread[] threads = new Thread[numThreads];
+        long[] partialHits = new long[numThreads];
+
+        for (int t = 0; t < numThreads; t++) {
+            final int idx = t;
+            threads[t] = new Thread(() -> {
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                long localHits = 0;
+                for (long i = 0; i < pointsPerThread; i++) {
+                    double x = rnd.nextDouble();
+                    double y = rnd.nextDouble();
+                    if (x * x + y * y <= 1.0) {
+                        localHits++;
+                    }
+                }
+                partialHits[idx] = localHits;
+            });
+            threads[t].start();
+        }
+        for (Thread th : threads) th.join();
+
+        long total = 0;
+        for (long h : partialHits) total += h;
+        return 4.0 * total / totalPoints;
+    }
+}
+
+
+
+
+
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
+
+
+public class MonteCarloPi {
+
+    static long totalHits = 0;
+
+    private static final Object LOCK = new Object();
+
+    public static void main(String[] args) throws InterruptedException {
+        if (args.length < 3) {
+            System.out.println("Usage: java MonteCarloPi <race|sync|atomic|reduction|single> <numThreads> <totalPoints>");
+            return;
+        }
+
+        String mode = args[0];
+        int numThreads = Integer.parseInt(args[1]);
+        long totalPoints = Long.parseLong(args[2]);
+
+        long start = System.nanoTime();
+        double pi;
+
+        switch (mode) {
+            case "race":
+                pi = runRace(numThreads, totalPoints);
+                break;
+            case "sync":
+                pi = runSynchronized(numThreads, totalPoints);
+                break;
+            case "atomic":
+                pi = runAtomic(numThreads, totalPoints);
+                break;
+            case "reduction":
+                pi = runReduction(numThreads, totalPoints);
+                break;
+            case "single":
+                pi = runSingleThreaded(totalPoints);
+                break;
+            default:
+                System.out.println("Unknown mode: " + mode);
+                return;
+        }
+
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        System.out.printf("mode=%-10s threads=%-3d points=%-12d pi~=%.6f  time=%dms%n",
+                mode, numThreads, totalPoints, pi, elapsedMs);
+    }
+
+
+    static double runRace(int numThreads, long totalPoints) throws InterruptedException {
+        totalHits = 0;
+        long pointsPerThread = totalPoints / numThreads;
+        Thread[] threads = new Thread[numThreads];
+
+        for (int t = 0; t < numThreads; t++) {
+            threads[t] = new Thread(() -> {
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                for (long i = 0; i < pointsPerThread; i++) {
+                    double x = rnd.nextDouble();
+                    double y = rnd.nextDouble();
+                    if (x * x + y * y <= 1.0) {
+                        totalHits++;
+                    }
+                }
+            });
+            threads[t].start();
+        }
+        for (Thread th : threads) th.join();
+
+        return 4.0 * totalHits / totalPoints;
+    }
+
+    //Part 2a
+    static double runSynchronized(int numThreads, long totalPoints) throws InterruptedException {
+        totalHits = 0;
+        long pointsPerThread = totalPoints / numThreads;
+        Thread[] threads = new Thread[numThreads];
+
+        for (int t = 0; t < numThreads; t++) {
+            threads[t] = new Thread(() -> {
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                for (long i = 0; i < pointsPerThread; i++) {
+                    double x = rnd.nextDouble();
+                    double y = rnd.nextDouble();
+                    if (x * x + y * y <= 1.0) {
+                        synchronized (LOCK) {
+                            totalHits++;
+                        }
+                    }
+                }
+            });
+            threads[t].start();
+        }
+        for (Thread th : threads) th.join();
+
+        return 4.0 * totalHits / totalPoints;
+    }
+
+    //Part 2b
+    static double runAtomic(int numThreads, long totalPoints) throws InterruptedException {
+        AtomicLong hits = new AtomicLong(0);
+        long pointsPerThread = totalPoints / numThreads;
+        Thread[] threads = new Thread[numThreads];
+
+        for (int t = 0; t < numThreads; t++) {
+            threads[t] = new Thread(() -> {
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                for (long i = 0; i < pointsPerThread; i++) {
+                    double x = rnd.nextDouble();
+                    double y = rnd.nextDouble();
+                    if (x * x + y * y <= 1.0) {
+                        hits.incrementAndGet();
+                    }
+                }
+            });
+            threads[t].start();
+        }
+        for (Thread th : threads) th.join();
+
+        return 4.0 * hits.get() / totalPoints;
+    }
+
+    //Part 3
+    static double runReduction(int numThreads, long totalPoints) throws InterruptedException {
+        long pointsPerThread = totalPoints / numThreads;
+        Thread[] threads = new Thread[numThreads];
+        long[] partialHits = new long[numThreads];
+
+        for (int t = 0; t < numThreads; t++) {
+            final int idx = t;
+            threads[t] = new Thread(() -> {
+                ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                long localHits = 0;
+                for (long i = 0; i < pointsPerThread; i++) {
+                    double x = rnd.nextDouble();
+                    double y = rnd.nextDouble();
+                    if (x * x + y * y <= 1.0) {
+                        localHits++;
+                    }
+                }
+                partialHits[idx] = localHits;
+            });
+            threads[t].start();
+        }
+        for (Thread th : threads) th.join();
+
+        long total = 0;
+        for (long h : partialHits) total += h;
+        return 4.0 * total / totalPoints;
+    }
+
+    //Baseline
+    static double runSingleThreaded(long totalPoints) {
+        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+        long hits = 0;
+        for (long i = 0; i < totalPoints; i++) {
+            double x = rnd.nextDouble();
+            double y = rnd.nextDouble();
+            if (x * x + y * y <= 1.0) {
+                hits++;
+            }
+        }
+        return 4.0 * hits / totalPoints;
+    }
+}
+
