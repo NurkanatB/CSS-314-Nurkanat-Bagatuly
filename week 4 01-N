@@ -1,0 +1,734 @@
+PS C:\Users\user> Get-Content hw_info.txt
+
+
+Name                      : AMD Ryzen 5 4600H with Radeon Graphics
+NumberOfCores             : 6
+NumberOfLogicalProcessors : 12
+
+
+# gcc --version
+gcc.exe (Rev5, Built by MSYS2 project) 16.1.0
+Copyright (C) 2026 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+N = 10,000,000 + ( 3216 * 1,000 ) = 13 216 000
+
+
+#include <stdio.h>
+#include <stdint.h>
+#include <omp.h>
+ 
+#define N 13216000ULL
+#define MOD 1000000007ULL
+ 
+static inline uint32_t collatz_steps(uint64_t n) {
+    uint32_t steps = 0;
+    while (n > 1) {
+        if ((n & 1) == 0) {
+            n >>= 1;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps++;
+    }
+    return steps;
+}
+ 
+/* One full pass over [1, N]. Returns max steps via out param,
+ * checksum via return value. */
+static uint64_t run_pass(uint32_t *max_steps_out) {
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+ 
+    for (uint64_t i = 1; i <= N; i++) {
+        uint32_t steps = collatz_steps(i);
+        if (steps > max_steps) {
+            max_steps = steps;
+        }
+        checksum = (checksum + steps) % MOD;
+    }
+ 
+    *max_steps_out = max_steps;
+    return checksum;
+}
+ 
+int main(void) {
+    printf("=== Sequential Collatz Baseline ===\n");
+    printf("N = %llu\n\n", (unsigned long long)N);
+ 
+    double times[3];
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+ 
+    for (int run = 0; run < 3; run++) {
+        double t0 = omp_get_wtime();
+        checksum = run_pass(&max_steps);
+        double t1 = omp_get_wtime();
+        times[run] = t1 - t0;
+ 
+        printf("Run %d: %.6f s  (max_steps=%u, checksum=%llu)%s\n",
+               run + 1, times[run], max_steps,
+               (unsigned long long)checksum,
+               run == 0 ? "  <-- warm-up, discard" : "");
+    }
+ 
+    double t_seq = (times[1] + times[2]) / 2.0;
+ 
+    printf("\n--- Summary ---\n");
+    printf("Max stopping time observed : %u\n", max_steps);
+    printf("Checksum (sum mod 1e9+7)   : %llu\n", (unsigned long long)checksum);
+    printf("T_seq = (Run2 + Run3) / 2  : %.6f s\n", t_seq);
+ 
+    return 0;
+}
+ 
+
+
+user@WIN-FR0VN15BKS7 UCRT64 ~/lab1_230103216
+# gcc -O2 -fopenmp collatz_seq.c -o collatz_seq
+./collatz_seq
+=== Sequential Collatz Baseline ===
+N = 13216000
+
+Run 1: 4.918000 s  (max_steps=688, checksum=90294763)  <-- warm-up, discard
+Run 2: 3.433000 s  (max_steps=688, checksum=90294763)
+Run 3: 3.320000 s  (max_steps=688, checksum=90294763)
+
+--- Summary ---
+Max stopping time observed : 688
+Checksum (sum mod 1e9+7)   : 90294763
+T_seq = (Run2 + Run3) / 2  : 3.376500 s
+
+user@WIN-FR0VN15BKS7 UCRT64 ~/lab1_230103216
+#
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <omp.h>
+ 
+#define N 13216000ULL
+#define MOD 1000000007ULL
+#define EXPECTED_CHECKSUM 90294763ULL
+#define EXPECTED_MAX_STEPS 688u
+ 
+static inline uint32_t collatz_steps(uint64_t n) {
+    uint32_t steps = 0;
+    while (n > 1) {
+        if ((n & 1) == 0) {
+            n >>= 1;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps++;
+    }
+    return steps;
+}
+ 
+/* One full parallel pass over [1, N] using `threads` OpenMP threads.
+ * Returns checksum, writes max steps via out param. */
+static uint64_t run_pass(int threads, uint32_t *max_steps_out) {
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+ 
+    #pragma omp parallel for num_threads(threads) schedule(static) \
+        reduction(max:max_steps) reduction(+:checksum)
+    for (uint64_t i = 1; i <= N; i++) {
+        uint32_t steps = collatz_steps(i);
+        if (steps > max_steps) {
+            max_steps = steps;
+        }
+        checksum = (checksum + steps) % MOD;
+    }
+ 
+    /* IMPORTANT: reduction(+:checksum) sums each thread's already-modded
+     * partial checksum across threads, but does NOT re-apply % MOD to
+     * the combined result. Without this line, checksum can come out as
+     * (true_checksum + j*MOD) for some small j = 0..(threads-1),
+     * which is why raw values differed across thread counts. */
+    checksum %= MOD;
+ 
+    *max_steps_out = max_steps;
+    return checksum;
+}
+ 
+int main(int argc, char **argv) {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <num_threads>\n", argv[0]);
+        return 1;
+    }
+    int threads = atoi(argv[1]);
+    if (threads < 1) {
+        fprintf(stderr, "Thread count must be >= 1\n");
+        return 1;
+    }
+ 
+    printf("=== Parallel Collatz Scaling (k = %d threads) ===\n", threads);
+    printf("N = %llu\n\n", (unsigned long long)N);
+ 
+    double times[3];
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+ 
+    for (int run = 0; run < 3; run++) {
+        double t0 = omp_get_wtime();
+        checksum = run_pass(threads, &max_steps);
+        double t1 = omp_get_wtime();
+        times[run] = t1 - t0;
+ 
+        printf("Run %d: %.6f s  (max_steps=%u, checksum=%llu)%s\n",
+               run + 1, times[run], max_steps,
+               (unsigned long long)checksum,
+               run == 0 ? "  <-- warm-up, discard" : "");
+    }
+ 
+    double t_k = (times[1] + times[2]) / 2.0;
+ 
+    printf("\n--- Summary (k = %d) ---\n", threads);
+    printf("Max stopping time observed : %u\n", max_steps);
+    printf("Checksum (sum mod 1e9+7)   : %llu\n", (unsigned long long)checksum);
+    printf("T_%d = (Run2 + Run3) / 2   : %.6f s\n", threads, t_k);
+ 
+    if (checksum != EXPECTED_CHECKSUM || max_steps != EXPECTED_MAX_STEPS) {
+        printf("\n[WARNING] Checksum/max_steps do NOT match the sequential "
+               "baseline (expected checksum=%llu, max_steps=%u). "
+               "Something is wrong with the parallel reduction.\n",
+               (unsigned long long)EXPECTED_CHECKSUM, EXPECTED_MAX_STEPS);
+    } else {
+        printf("\n[OK] Checksum and max_steps match sequential baseline.\n");
+    }
+ 
+    return 0;
+}
+
+
+user@WIN-FR0VN15BKS7 UCRT64 ~/lab1_230103216
+# gcc -O2 -fopenmp collatz_par.c -o collatz_par
+./collatz_par 2
+./collatz_par 4
+./collatz_par 8
+./collatz_par 12
+=== Parallel Collatz Scaling (k = 2 threads) ===
+N = 13216000
+
+Run 1: 2.495000 s  (max_steps=688, checksum=90294763)  <-- warm-up, discard
+Run 2: 2.419000 s  (max_steps=688, checksum=90294763)
+Run 3: 2.411000 s  (max_steps=688, checksum=90294763)
+
+--- Summary (k = 2) ---
+Max stopping time observed : 688
+Checksum (sum mod 1e9+7)   : 90294763
+T_2 = (Run2 + Run3) / 2   : 2.415000 s
+
+[OK] Checksum and max_steps match sequential baseline.
+=== Parallel Collatz Scaling (k = 4 threads) ===
+N = 13216000
+
+Run 1: 1.318000 s  (max_steps=688, checksum=90294763)  <-- warm-up, discard
+Run 2: 1.273000 s  (max_steps=688, checksum=90294763)
+Run 3: 0.869000 s  (max_steps=688, checksum=90294763)
+
+--- Summary (k = 4) ---
+Max stopping time observed : 688
+Checksum (sum mod 1e9+7)   : 90294763
+T_4 = (Run2 + Run3) / 2   : 1.071000 s
+
+[OK] Checksum and max_steps match sequential baseline.
+=== Parallel Collatz Scaling (k = 8 threads) ===
+N = 13216000
+
+Run 1: 0.547000 s  (max_steps=688, checksum=90294763)  <-- warm-up, discard
+Run 2: 0.515000 s  (max_steps=688, checksum=90294763)
+Run 3: 0.526000 s  (max_steps=688, checksum=90294763)
+
+--- Summary (k = 8) ---
+Max stopping time observed : 688
+Checksum (sum mod 1e9+7)   : 90294763
+T_8 = (Run2 + Run3) / 2   : 0.520500 s
+
+[OK] Checksum and max_steps match sequential baseline.
+=== Parallel Collatz Scaling (k = 12 threads) ===
+N = 13216000
+
+Run 1: 0.454000 s  (max_steps=688, checksum=90294763)  <-- warm-up, discard
+Run 2: 0.419000 s  (max_steps=688, checksum=90294763)
+Run 3: 0.416000 s  (max_steps=688, checksum=90294763)
+
+--- Summary (k = 12) ---
+Max stopping time observed : 688
+Checksum (sum mod 1e9+7)   : 90294763
+T_12 = (Run2 + Run3) / 2   : 0.417500 s
+
+[OK] Checksum and max_steps match sequential baseline.
+
+
+k	Avg T_k (s)	S_emp(k) = T_seq/T_k	S_theo(k)	Δ(k) = S_theo − S_emp
+1	3.376500	1.0000	1.0000	0.0000
+2	2.415000	1.3984	1.3984	0.0000 (по построению)
+4	1.071000	3.1527	1.7462	−1.4065
+8	0.520500	6.4871	1.9943	−4.4928
+12	0.417500	8.0874	2.0934	−5.9940
+
+
+P = 0.5698
+
+Phase 4
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <omp.h>
+
+#define N 13216000ULL
+#define MOD 1000000007ULL
+
+static inline uint32_t collatz_steps(uint64_t n) {
+    uint32_t steps = 0;
+    while (n > 1) {
+        if ((n & 1) == 0) {
+            n >>= 1;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps++;
+    }
+    return steps;
+}
+
+/* One pass, schedule kind selected by a small integer code so we can
+ * keep a single function body (OpenMP schedule clauses can't easily
+ * be parameterized at runtime without the schedule(runtime) clause). */
+static uint64_t run_pass(int threads, int schedule_code, uint32_t *max_out) {
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+
+    switch (schedule_code) {
+    case 0: /* static, default chunk */
+        #pragma omp parallel for num_threads(threads) schedule(static) \
+            reduction(max:max_steps) reduction(+:checksum)
+        for (uint64_t i = 1; i <= N; i++) {
+            uint32_t s = collatz_steps(i);
+            if (s > max_steps) max_steps = s;
+            checksum = (checksum + s) % MOD;
+        }
+        break;
+    case 1: /* static, chunk=1000 */
+        #pragma omp parallel for num_threads(threads) schedule(static, 1000) \
+            reduction(max:max_steps) reduction(+:checksum)
+        for (uint64_t i = 1; i <= N; i++) {
+            uint32_t s = collatz_steps(i);
+            if (s > max_steps) max_steps = s;
+            checksum = (checksum + s) % MOD;
+        }
+        break;
+    case 2: /* dynamic, chunk=100 */
+        #pragma omp parallel for num_threads(threads) schedule(dynamic, 100) \
+            reduction(max:max_steps) reduction(+:checksum)
+        for (uint64_t i = 1; i <= N; i++) {
+            uint32_t s = collatz_steps(i);
+            if (s > max_steps) max_steps = s;
+            checksum = (checksum + s) % MOD;
+        }
+        break;
+    case 3: /* dynamic, chunk=10000 */
+        #pragma omp parallel for num_threads(threads) schedule(dynamic, 10000) \
+            reduction(max:max_steps) reduction(+:checksum)
+        for (uint64_t i = 1; i <= N; i++) {
+            uint32_t s = collatz_steps(i);
+            if (s > max_steps) max_steps = s;
+            checksum = (checksum + s) % MOD;
+        }
+        break;
+    case 4: /* guided */
+        #pragma omp parallel for num_threads(threads) schedule(guided) \
+            reduction(max:max_steps) reduction(+:checksum)
+        for (uint64_t i = 1; i <= N; i++) {
+            uint32_t s = collatz_steps(i);
+            if (s > max_steps) max_steps = s;
+            checksum = (checksum + s) % MOD;
+        }
+        break;
+    }
+
+    checksum %= MOD; /* combine-step fix, see collatz_par.c note */
+    *max_out = max_steps;
+    return checksum;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        fprintf(stderr,
+            "Usage: %s <static|static1000|dynamic100|dynamic10000|guided> "
+            "<num_threads>\n", argv[0]);
+        return 1;
+    }
+    int threads = atoi(argv[2]);
+    if (threads < 1) {
+        fprintf(stderr, "Thread count must be >= 1\n");
+        return 1;
+    }
+
+    int code;
+    const char *label;
+    if (strcmp(argv[1], "static") == 0) { code = 0; label = "schedule(static)"; }
+    else if (strcmp(argv[1], "static1000") == 0) { code = 1; label = "schedule(static,1000)"; }
+    else if (strcmp(argv[1], "dynamic100") == 0) { code = 2; label = "schedule(dynamic,100)"; }
+    else if (strcmp(argv[1], "dynamic10000") == 0) { code = 3; label = "schedule(dynamic,10000)"; }
+    else if (strcmp(argv[1], "guided") == 0) { code = 4; label = "schedule(guided)"; }
+    else {
+        fprintf(stderr, "Unknown schedule kind: %s\n", argv[1]);
+        return 1;
+    }
+
+    printf("=== Experiment B: %s (threads=%d) ===\n", label, threads);
+
+    double times[3];
+    uint32_t max_steps = 0;
+    uint64_t checksum = 0;
+
+    for (int run = 0; run < 3; run++) {
+        double t0 = omp_get_wtime();
+        checksum = run_pass(threads, code, &max_steps);
+        double t1 = omp_get_wtime();
+        times[run] = t1 - t0;
+        printf("Run %d: %.6f s  (checksum=%llu)%s\n",
+               run + 1, times[run], (unsigned long long)checksum,
+               run == 0 ? "  <-- warm-up, discard" : "");
+    }
+
+    double avg = (times[1] + times[2]) / 2.0;
+    printf("\n--- Summary: %s ---\n", label);
+    printf("Avg execution time : %.6f s\n", avg);
+    printf("Checksum            : %llu (expect 90294763)\n",
+           (unsigned long long)checksum);
+
+    return 0;
+}
+
+
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <omp.h>
+
+#define N 13216000ULL
+#define THRESHOLD 100
+#define MAX_THREADS 64
+
+static inline uint32_t collatz_steps(uint64_t n) {
+    uint32_t steps = 0;
+    while (n > 1) {
+        if ((n & 1) == 0) {
+            n >>= 1;
+        } else {
+            n = 3 * n + 1;
+        }
+        steps++;
+    }
+    return steps;
+}
+
+/* ---- Variant 1: naive per-thread array, adjacent elements share a
+ * 64-byte cache line -> false sharing under MESI protocol. ---- */
+static uint64_t naive_pass(int threads) {
+    static int hit_count[MAX_THREADS]; /* NOT padded: triggers false sharing */
+    memset(hit_count, 0, sizeof(hit_count));
+
+    #pragma omp parallel for num_threads(threads) schedule(static)
+    for (uint64_t i = 1; i <= N; i++) {
+        if (collatz_steps(i) > THRESHOLD) {
+            hit_count[omp_get_thread_num()]++;
+        }
+    }
+
+    uint64_t total = 0;
+    for (int t = 0; t < threads; t++) total += hit_count[t];
+    return total;
+}
+
+/* ---- Variant 2: OpenMP reduction, no shared mutable array at all. ---- */
+static uint64_t reduction_pass(int threads) {
+    uint64_t total_hits = 0;
+
+    #pragma omp parallel for num_threads(threads) schedule(static) \
+        reduction(+:total_hits)
+    for (uint64_t i = 1; i <= N; i++) {
+        if (collatz_steps(i) > THRESHOLD) {
+            total_hits++;
+        }
+    }
+    return total_hits;
+}
+
+static void run_and_report(const char *label, uint64_t (*pass_fn)(int),
+                            int threads) {
+    printf("=== Experiment A: %s (threads=%d) ===\n", label, threads);
+
+    double times[3];
+    uint64_t total = 0;
+
+    for (int run = 0; run < 3; run++) {
+        double t0 = omp_get_wtime();
+        total = pass_fn(threads);
+        double t1 = omp_get_wtime();
+        times[run] = t1 - t0;
+        printf("Run %d: %.6f s  (hits=%llu)%s\n",
+               run + 1, times[run], (unsigned long long)total,
+               run == 0 ? "  <-- warm-up, discard" : "");
+    }
+
+    double avg = (times[1] + times[2]) / 2.0;
+    double throughput = (double)N / avg;
+
+    printf("\n--- Summary: %s ---\n", label);
+    printf("Total hits (steps > %d)     : %llu\n", THRESHOLD,
+           (unsigned long long)total);
+    printf("Avg execution time          : %.6f s\n", avg);
+    printf("Effective throughput        : %.2f iter/sec\n\n", throughput);
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <naive|padded> <num_threads>\n", argv[0]);
+        return 1;
+    }
+    int threads = atoi(argv[2]);
+    if (threads < 1 || threads > MAX_THREADS) {
+        fprintf(stderr, "Thread count must be 1..%d\n", MAX_THREADS);
+        return 1;
+    }
+
+    if (strcmp(argv[1], "naive") == 0) {
+        run_and_report("Variant 1: Naive hits[tid]++ (False Sharing)",
+                        naive_pass, threads);
+    } else if (strcmp(argv[1], "padded") == 0) {
+        run_and_report("Variant 2: Reduction (Mitigated)",
+                        reduction_pass, threads);
+    } else {
+        fprintf(stderr, "First argument must be 'naive' or 'padded'\n");
+        return 1;
+    }
+
+    return 0;
+}
+
+
+user@WIN-FR0VN15BKS7 UCRT64 ~/lab1_230103216
+# gcc -O2 -fopenmp collatz_falsesharing.c -o collatz_falsesharing
+./collatz_falsesharing naive 6
+./collatz_falsesharing padded 6
+=== Experiment A: Variant 1: Naive hits[tid]++ (False Sharing) (threads=6) ===
+Run 1: 0.899000 s  (hits=10653868)  <-- warm-up, discard
+Run 2: 0.989000 s  (hits=10653868)
+Run 3: 0.949000 s  (hits=10653868)
+
+--- Summary: Variant 1: Naive hits[tid]++ (False Sharing) ---
+Total hits (steps > 100)     : 10653868
+Avg execution time          : 0.969000 s
+Effective throughput        : 13638803.14 iter/sec
+
+=== Experiment A: Variant 2: Reduction (Mitigated) (threads=6) ===
+Run 1: 0.930000 s  (hits=10653868)  <-- warm-up, discard
+Run 2: 0.837000 s  (hits=10653868)
+Run 3: 0.901000 s  (hits=10653868)
+
+--- Summary: Variant 2: Reduction (Mitigated) ---
+Total hits (steps > 100)     : 10653868
+Avg execution time          : 0.869000 s
+Effective throughput        : 15208286.12 iter/sec
+
+
+
+
+user@WIN-FR0VN15BKS7 UCRT64 ~/lab1_230103216
+# gcc -O2 -fopenmp collatz_scheduling.c -o collatz_scheduling
+./collatz_scheduling static 12
+./collatz_scheduling static1000 12
+./collatz_scheduling dynamic100 12
+./collatz_scheduling dynamic10000 12
+./collatz_scheduling guided 12
+=== Experiment B: schedule(static) (threads=12) ===
+Run 1: 0.591000 s  (checksum=90294763)  <-- warm-up, discard
+Run 2: 0.502000 s  (checksum=90294763)
+Run 3: 0.495000 s  (checksum=90294763)
+
+--- Summary: schedule(static) ---
+Avg execution time : 0.498500 s
+Checksum            : 90294763 (expect 90294763)
+=== Experiment B: schedule(static,1000) (threads=12) ===
+Run 1: 0.491000 s  (checksum=90294763)  <-- warm-up, discard
+Run 2: 0.484000 s  (checksum=90294763)
+Run 3: 0.517000 s  (checksum=90294763)
+
+--- Summary: schedule(static,1000) ---
+Avg execution time : 0.500500 s
+Checksum            : 90294763 (expect 90294763)
+=== Experiment B: schedule(dynamic,100) (threads=12) ===
+Run 1: 0.477000 s  (checksum=90294763)  <-- warm-up, discard
+Run 2: 0.448000 s  (checksum=90294763)
+Run 3: 0.451000 s  (checksum=90294763)
+
+--- Summary: schedule(dynamic,100) ---
+Avg execution time : 0.449500 s
+Checksum            : 90294763 (expect 90294763)
+=== Experiment B: schedule(dynamic,10000) (threads=12) ===
+Run 1: 0.479000 s  (checksum=90294763)  <-- warm-up, discard
+Run 2: 0.474000 s  (checksum=90294763)
+Run 3: 0.458000 s  (checksum=90294763)
+
+--- Summary: schedule(dynamic,10000) ---
+Avg execution time : 0.466000 s
+Checksum            : 90294763 (expect 90294763)
+=== Experiment B: schedule(guided) (threads=12) ===
+Run 1: 0.476000 s  (checksum=90294763)  <-- warm-up, discard
+Run 2: 0.443000 s  (checksum=90294763)
+Run 3: 0.408000 s  (checksum=90294763)
+
+--- Summary: schedule(guided) ---
+Avg execution time : 0.425500 s
+Checksum            : 90294763 (expect 90294763)
+
+
+
+experiment
+k_or_variant
+run1_cold_s
+run2_s
+run3_s
+avg_time_s
+S_emp
+S_theo
+delta
+checksum
+notes
+amdahl_scaling
+1
+4.918000
+3.433000
+3.320000
+3.376500
+1.0000
+1.0000
+0.0000
+90294763
+sequential baseline (collatz_seq.c)
+amdahl_scaling
+2
+2.495000
+2.419000
+2.411000
+2.415000
+1.3984
+1.3984
+0.0000
+90294763
+p derived from this row
+amdahl_scaling
+4
+1.318000
+1.273000
+0.869000
+1.071000
+3.1527
+1.7462
+-1.4065
+90294763
+amdahl_scaling
+8
+0.547000
+0.515000
+0.526000
+0.520500
+6.4871
+1.9943
+-4.4928
+90294763
+amdahl_scaling
+12
+0.454000
+0.419000
+0.416000
+0.417500
+8.0874
+2.0934
+-5.9940
+90294763
+max logical threads
+false_sharing
+naive_k6
+0.899000
+0.989000
+0.949000
+0.969000
+hits=10653868; throughput=13638803.14 iter/s
+false_sharing
+reduction_k6
+0.930000
+0.837000
+0.901000
+0.869000
+hits=10653868; throughput=15208286.12 iter/s; penalty_ratio_naive_over_reduction=1.115
+scheduling
+static_default_k12
+0.591000
+0.502000
+0.495000
+0.498500
+90294763
+scheduling
+static_1000_k12
+0.491000
+0.484000
+0.517000
+0.500500
+90294763
+scheduling
+dynamic_100_k12
+0.477000
+0.448000
+0.451000
+0.449500
+90294763
+fastest of dynamic/static variants
+scheduling
+dynamic_10000_k12
+0.479000
+0.474000
+0.458000
+0.466000
+90294763
+scheduling
+guided_k12
+0.476000
+0.443000
+0.408000
+0.425500
+90294763
+overall fastest scheduling variant
+derived_parameter
+p
+0.5698
+parallel fraction from S_emp(2)=1.3984
+hardware
+cpu
+AMD Ryzen 5 4600H with Radeon Graphics
+hardware
+physical_cores
+6
+hardware
+logical_threads
+12
+hardware
+N
+13216000
+student_id=230103216
+hardware
+max_stopping_time
+688
