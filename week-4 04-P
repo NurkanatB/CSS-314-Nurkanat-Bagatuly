@@ -1,0 +1,460 @@
+Task 1
+
+import threading
+import time
+import math
+from concurrent.futures import ThreadPoolExecutor
+
+def worker_task(thread_id: int, team_size: int, heavy: bool = False):
+    native_tid = threading.get_native_id()
+    role = "Master" if thread_id == 0 else "Worker"
+    if heavy:
+        total = 0.0
+        for _ in range(2_000_000):
+            total += math.sqrt(total + 1)
+    else:
+        time.sleep(0.001 * (thread_id % 3))
+    print(f"[{role}] Rank: {thread_id} of {team_size} | TID: {native_tid}")
+
+def run_team(num_threads: int, heavy: bool = False):
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(worker_task, tid, num_threads, heavy) for tid in range(num_threads)]
+        for f in futures:
+            f.result()
+
+def task_1_1():
+    print("=== TASK 1.1: non-determinism ===")
+    with open("run_log.txt", "w") as log:
+        import sys
+        for i in range(10):
+            log.write(f"--- run {i+1} ---\n")
+            from io import StringIO
+            buf = StringIO()
+            old_stdout = sys.stdout
+            sys.stdout = buf
+            run_team(4)
+            sys.stdout = old_stdout
+            log.write(buf.getvalue())
+    print("Готово. Результаты в run_log.txt")
+
+def task_1_2():
+    print("=== TASK 1.2: oversubscription sweep ===")
+    results = {}
+    for P in [1, 2, 4, 8, 16, 32, 64]:
+        t0 = time.perf_counter()
+        run_team(P)
+        t1 = time.perf_counter()
+        results[P] = t1 - t0
+    with open("task1_2_results.csv", "w") as f:
+        f.write("P,time_sec\n")
+        for P, t in results.items():
+            f.write(f"{P},{t:.6f}\n")
+            print(f"P={P}: {t:.6f} s")
+    print("Готово. Результаты в task1_2_results.csv")
+
+def task_1_3():
+    print("=== TASK 1.3: CPU saturation (следи за монитором ресурсов!) ===")
+    run_team(4, heavy=True)
+    print("Готово.")
+
+if __name__ == "__main__":
+    task_1_1()
+    task_1_2()
+    task_1_3()
+
+
+
+output:
+(.venv) PS C:\Users\user\PycharmProjects\PythonProject> python3 lab1.py
+=== TASK 1.1: non-determinism ===
+Готово. Результаты в run_log.txt
+=== TASK 1.2: oversubscription sweep ===
+[Master] Rank: 0 of 1 | TID: 5804
+[Master] Rank: 0 of 2 | TID: 5224
+[Worker] Rank: 1 of 2 | TID: 5224
+[Master] Rank: 0 of 4 | TID: 10172
+[Worker] Rank: 3 of 4 | TID: 9700
+[Worker] Rank: 1 of 4 | TID: 10172
+[Worker] Rank: 2 of 4 | TID: 22604
+[Master] Rank: 0 of 8 | TID: 11584
+[Worker] Rank: 3 of 8 | TID: 21744
+[Worker] Rank: 6 of 8 | TID: 22640
+[Worker] Rank: 1 of 8 | TID: 11584
+[Worker] Rank: 4 of 8 | TID: 21744
+[Worker] Rank: 2 of 8 | TID: 4564
+[Worker] Rank: 7 of 8 | TID: 22640
+[Worker] Rank: 5 of 8 | TID: 12876
+[Master] Rank: 0 of 16 | TID: 17700
+[Worker] Rank: 3 of 16 | TID: 21048
+[Worker] Rank: 6 of 16 | TID: 980
+[Worker] Rank: 9 of 16 | TID: 19320
+[Worker] Rank: 1 of 16 | TID: 17700
+[Worker] Rank: 12 of 16 | TID: 22796
+[Worker] Rank: 15 of 16 | TID: 22796
+[Worker] Rank: 4 of 16 | TID: 21048
+[Worker] Rank: 7 of 16 | TID: 980
+[Worker] Rank: 2 of 16 | TID: 5728
+[Worker] Rank: 10 of 16 | TID: 19320
+[Worker] Rank: 5 of 16 | TID: 12948
+[Worker] Rank: 13 of 16 | TID: 17700
+[Worker] Rank: 8 of 16 | TID: 15512
+[Worker] Rank: 11 of 16 | TID: 23052
+[Worker] Rank: 14 of 16 | TID: 20232
+[Master] Rank: 0 of 32 | TID: 18724
+[Worker] Rank: 3 of 32 | TID: 5816
+[Worker] Rank: 6 of 32 | TID: 20436
+[Worker] Rank: 9 of 32 | TID: 10024
+[Worker] Rank: 12 of 32 | TID: 9596
+[Worker] Rank: 1 of 32 | TID: 18724
+[Worker] Rank: 15 of 32 | TID: 18724
+[Worker] Rank: 7 of 32 | TID: 20436
+[Worker] Rank: 4 of 32 | TID: 5816
+[Worker] Rank: 18 of 32 | TID: 20436
+[Worker] Rank: 21 of 32 | TID: 5816
+[Worker] Rank: 13 of 32 | TID: 9596
+[Worker] Rank: 10 of 32 | TID: 10024
+[Worker] Rank: 24 of 32 | TID: 21824
+[Worker] Rank: 27 of 32 | TID: 10024
+[Worker] Rank: 16 of 32 | TID: 20960
+[Worker] Rank: 2 of 32 | TID: 12592
+[Worker] Rank: 5 of 32 | TID: 18172
+[Worker] Rank: 22 of 32 | TID: 7924
+[Worker] Rank: 30 of 32 | TID: 17164
+[Worker] Rank: 19 of 32 | TID: 10888
+[Worker] Rank: 17 of 32 | TID: 18724
+[Worker] Rank: 14 of 32 | TID: 4588
+[Worker] Rank: 11 of 32 | TID: 7636
+[Worker] Rank: 8 of 32 | TID: 14868
+[Worker] Rank: 25 of 32 | TID: 9596
+[Worker] Rank: 20 of 32 | TID: 20436
+[Worker] Rank: 31 of 32 | TID: 10024
+[Worker] Rank: 28 of 32 | TID: 19560
+[Worker] Rank: 23 of 32 | TID: 5816
+[Worker] Rank: 26 of 32 | TID: 13216
+[Worker] Rank: 29 of 32 | TID: 21824
+[Master] Rank: 0 of 64 | TID: 8196
+[Worker] Rank: 3 of 64 | TID: 22092
+[Worker] Rank: 6 of 64 | TID: 10444
+[Worker] Rank: 9 of 64 | TID: 16424
+[Worker] Rank: 12 of 64 | TID: 9440
+[Worker] Rank: 15 of 64 | TID: 14564
+[Worker] Rank: 18 of 64 | TID: 19444
+[Worker] Rank: 21 of 64 | TID: 2012
+[Worker] Rank: 24 of 64 | TID: 5724
+[Worker] Rank: 13 of 64 | TID: 9440
+[Worker] Rank: 10 of 64 | TID: 16424
+[Worker] Rank: 4 of 64 | TID: 22092
+[Worker] Rank: 7 of 64 | TID: 10444
+[Worker] Rank: 27 of 64 | TID: 9440
+[Worker] Rank: 1 of 64 | TID: 8196
+[Worker] Rank: 30 of 64 | TID: 9668
+[Worker] Rank: 36 of 64 | TID: 8196
+[Worker] Rank: 33 of 64 | TID: 10444
+[Worker] Rank: 39 of 64 | TID: 13496
+[Worker] Rank: 25 of 64 | TID: 5724
+[Worker] Rank: 8 of 64 | TID: 19192
+[Worker] Rank: 19 of 64 | TID: 19444
+[Worker] Rank: 2 of 64 | TID: 23108
+[Worker] Rank: 11 of 64 | TID: 2312
+[Worker] Rank: 22 of 64 | TID: 2012
+[Worker] Rank: 16 of 64 | TID: 14564
+[Worker] Rank: 48 of 64 | TID: 19444
+[Worker] Rank: 31 of 64 | TID: 22092
+[Worker] Rank: 14 of 64 | TID: 2580
+[Worker] Rank: 5 of 64 | TID: 11012
+[Worker] Rank: 45 of 64 | TID: 13388
+[Worker] Rank: 42 of 64 | TID: 19032
+[Worker] Rank: 17 of 64 | TID: 17676
+[Worker] Rank: 23 of 64 | TID: 19928
+[Worker] Rank: 20 of 64 | TID: 23460
+[Worker] Rank: 37 of 64 | TID: 8572
+[Worker] Rank: 57 of 64 | TID: 22092
+[Worker] Rank: 60 of 64 | TID: 11012
+[Worker] Rank: 54 of 64 | TID: 20148
+[Worker] Rank: 43 of 64 | TID: 13496
+[Worker] Rank: 32 of 64 | TID: 17628
+[Worker] Rank: 26 of 64 | TID: 17296
+[Worker] Rank: 34 of 64 | TID: 18488
+[Worker] Rank: 51 of 64 | TID: 2312
+[Worker] Rank: 46 of 64 | TID: 19192
+[Worker] Rank: 63 of 64 | TID: 19032
+[Worker] Rank: 55 of 64 | TID: 19444
+[Worker] Rank: 35 of 64 | TID: 9440
+[Worker] Rank: 49 of 64 | TID: 23108
+[Worker] Rank: 29 of 64 | TID: 16424
+[Worker] Rank: 38 of 64 | TID: 9668
+[Worker] Rank: 28 of 64 | TID: 22760
+[Worker] Rank: 52 of 64 | TID: 15320
+[Worker] Rank: 40 of 64 | TID: 8196
+[Worker] Rank: 58 of 64 | TID: 2580
+[Worker] Rank: 44 of 64 | TID: 5724
+[Worker] Rank: 41 of 64 | TID: 10444
+[Worker] Rank: 47 of 64 | TID: 4708
+[Worker] Rank: 53 of 64 | TID: 2012
+[Worker] Rank: 50 of 64 | TID: 21116
+[Worker] Rank: 61 of 64 | TID: 18140
+[Worker] Rank: 56 of 64 | TID: 10484
+[Worker] Rank: 59 of 64 | TID: 19568
+[Worker] Rank: 62 of 64 | TID: 13388
+P=1: 0.000349 s
+P=2: 0.002406 s
+P=4: 0.003074 s
+P=8: 0.003739 s
+P=16: 0.004712 s
+P=32: 0.007004 s
+P=64: 0.008704 s
+Готово. Результаты в task1_2_results.csv
+=== TASK 1.3: CPU saturation (следи за монитором ресурсов!) ===
+[Worker] Rank: 1 of 4 | TID: 16144
+[Master] Rank: 0 of 4 | TID: 22620
+[Worker] Rank: 3 of 4 | TID: 12768
+[Worker] Rank: 2 of 4 | TID: 4040
+Готово.
+(.venv) PS C:\Users\user\PycharmProjects\PythonProject> python3 lab1.py
+=== TASK 1.1: non-determinism ===
+Готово. Результаты в run_log.txt
+=== TASK 1.2: oversubscription sweep ===
+[Master] Rank: 0 of 1 | TID: 23312
+[Master] Rank: 0 of 2 | TID: 20228
+[Worker] Rank: 1 of 2 | TID: 20228
+[Master] Rank: 0 of 4 | TID: 5064
+[Worker] Rank: 3 of 4 | TID: 11996
+[Worker] Rank: 1 of 4 | TID: 5064
+[Worker] Rank: 2 of 4 | TID: 19976
+[Master] Rank: 0 of 8 | TID: 19452
+[Worker] Rank: 3 of 8 | TID: 7396
+[Worker] Rank: 6 of 8 | TID: 10312
+[Worker] Rank: 1 of 8 | TID: 11096
+[Worker] Rank: 4 of 8 | TID: 21432
+[Worker] Rank: 7 of 8 | TID: 10312
+[Worker] Rank: 5 of 8 | TID: 7396
+[Worker] Rank: 2 of 8 | TID: 19452
+[Master] Rank: 0 of 16 | TID: 9996
+[Worker] Rank: 3 of 16 | TID: 10380
+[Worker] Rank: 6 of 16 | TID: 16236
+[Worker] Rank: 9 of 16 | TID: 6692
+[Worker] Rank: 12 of 16 | TID: 6688
+[Worker] Rank: 15 of 16 | TID: 5460
+[Worker] Rank: 7 of 16 | TID: 16236
+[Worker] Rank: 4 of 16 | TID: 10380
+[Worker] Rank: 1 of 16 | TID: 9996
+[Worker] Rank: 13 of 16 | TID: 6688
+[Worker] Rank: 2 of 16 | TID: 14300
+[Worker] Rank: 10 of 16 | TID: 6692
+[Worker] Rank: 8 of 16 | TID: 22108
+[Worker] Rank: 5 of 16 | TID: 15420
+[Worker] Rank: 11 of 16 | TID: 20896
+[Worker] Rank: 14 of 16 | TID: 1948
+[Master] Rank: 0 of 32 | TID: 16596
+[Worker] Rank: 3 of 32 | TID: 3840
+[Worker] Rank: 6 of 32 | TID: 21344
+[Worker] Rank: 9 of 32 | TID: 21656
+[Worker] Rank: 12 of 32 | TID: 14220
+[Worker] Rank: 15 of 32 | TID: 12712
+[Worker] Rank: 18 of 32 | TID: 23524
+[Worker] Rank: 21 of 32 | TID: 20284
+[Worker] Rank: 7 of 32 | TID: 21344
+[Worker] Rank: 1 of 32 | TID: 16596
+[Worker] Rank: 24 of 32 | TID: 21344
+[Worker] Rank: 4 of 32 | TID: 3840
+[Worker] Rank: 27 of 32 | TID: 21248
+[Worker] Rank: 2 of 32 | TID: 9184
+[Worker] Rank: 10 of 32 | TID: 21656
+[Worker] Rank: 30 of 32 | TID: 21704
+[Worker] Rank: 16 of 32 | TID: 12712
+[Worker] Rank: 19 of 32 | TID: 23524
+[Worker] Rank: 22 of 32 | TID: 20284
+[Worker] Rank: 8 of 32 | TID: 15900
+[Worker] Rank: 13 of 32 | TID: 14220
+[Worker] Rank: 5 of 32 | TID: 9948
+[Worker] Rank: 17 of 32 | TID: 14372
+[Worker] Rank: 14 of 32 | TID: 10124
+[Worker] Rank: 25 of 32 | TID: 17788
+[Worker] Rank: 11 of 32 | TID: 9920
+[Worker] Rank: 31 of 32 | TID: 21248
+[Worker] Rank: 20 of 32 | TID: 17492
+[Worker] Rank: 28 of 32 | TID: 21344
+[Worker] Rank: 23 of 32 | TID: 20500
+[Worker] Rank: 26 of 32 | TID: 16596
+[Worker] Rank: 29 of 32 | TID: 3840
+[Master] Rank: 0 of 64 | TID: 22244
+[Worker] Rank: 3 of 64 | TID: 20420
+[Worker] Rank: 6 of 64 | TID: 20312
+[Worker] Rank: 9 of 64 | TID: 13820
+[Worker] Rank: 12 of 64 | TID: 8612
+[Worker] Rank: 1 of 64 | TID: 22244
+[Worker] Rank: 15 of 64 | TID: 22244
+[Worker] Rank: 18 of 64 | TID: 14288
+[Worker] Rank: 4 of 64 | TID: 20420
+[Worker] Rank: 7 of 64 | TID: 20312
+[Worker] Rank: 21 of 64 | TID: 20420
+[Worker] Rank: 24 of 64 | TID: 18008
+[Worker] Rank: 27 of 64 | TID: 10784
+[Worker] Rank: 2 of 64 | TID: 22336
+[Worker] Rank: 13 of 64 | TID: 8612
+[Worker] Rank: 30 of 64 | TID: 22336
+[Worker] Rank: 10 of 64 | TID: 13820
+[Worker] Rank: 19 of 64 | TID: 23008
+[Worker] Rank: 5 of 64 | TID: 7564
+[Worker] Rank: 33 of 64 | TID: 15688
+[Worker] Rank: 36 of 64 | TID: 13820
+[Worker] Rank: 8 of 64 | TID: 22724
+[Worker] Rank: 22 of 64 | TID: 8096
+[Worker] Rank: 14 of 64 | TID: 21532
+[Worker] Rank: 16 of 64 | TID: 12176
+[Worker] Rank: 39 of 64 | TID: 14620
+[Worker] Rank: 28 of 64 | TID: 6948
+[Worker] Rank: 45 of 64 | TID: 3352
+[Worker] Rank: 25 of 64 | TID: 20420
+[Worker] Rank: 34 of 64 | TID: 22336
+[Worker] Rank: 23 of 64 | TID: 20312
+[Worker] Rank: 42 of 64 | TID: 13820
+[Worker] Rank: 31 of 64 | TID: 6868
+[Worker] Rank: 54 of 64 | TID: 14620
+[Worker] Rank: 57 of 64 | TID: 3352
+[Worker] Rank: 29 of 64 | TID: 10784
+[Worker] Rank: 48 of 64 | TID: 8096
+[Worker] Rank: 20 of 64 | TID: 14288
+[Worker] Rank: 49 of 64 | TID: 8184
+[Worker] Rank: 46 of 64 | TID: 22724
+[Worker] Rank: 37 of 64 | TID: 16496
+[Worker] Rank: 63 of 64 | TID: 20312
+[Worker] Rank: 17 of 64 | TID: 22244
+[Worker] Rank: 40 of 64 | TID: 15688
+[Worker] Rank: 32 of 64 | TID: 8612
+[Worker] Rank: 52 of 64 | TID: 12176
+[Worker] Rank: 60 of 64 | TID: 13680
+[Worker] Rank: 43 of 64 | TID: 7564
+[Worker] Rank: 51 of 64 | TID: 19664
+[Worker] Rank: 26 of 64 | TID: 18008
+[Worker] Rank: 41 of 64 | TID: 3220
+[Worker] Rank: 38 of 64 | TID: 23008
+[Worker] Rank: 44 of 64 | TID: 15456
+[Worker] Rank: 61 of 64 | TID: 22336
+[Worker] Rank: 11 of 64 | TID: 7420
+[Worker] Rank: 35 of 64 | TID: 13872
+[Worker] Rank: 58 of 64 | TID: 21332
+[Worker] Rank: 55 of 64 | TID: 6948
+[Worker] Rank: 47 of 64 | TID: 17032
+[Worker] Rank: 50 of 64 | TID: 21532
+[Worker] Rank: 53 of 64 | TID: 22780
+[Worker] Rank: 59 of 64 | TID: 20420
+[Worker] Rank: 56 of 64 | TID: 5264
+[Worker] Rank: 62 of 64 | TID: 3484
+P=1: 0.000329 s
+P=2: 0.002571 s
+P=4: 0.004118 s
+P=8: 0.003920 s
+P=16: 0.004572 s
+P=32: 0.005994 s
+P=64: 0.009640 s
+Готово. Результаты в task1_2_results.csv
+=== TASK 1.3: CPU saturation (следи за монитором ресурсов!) ===
+[Worker] Rank: 1 of 4 | TID: 12988
+[Worker] Rank: 2 of 4 | TID: 20888
+[Worker] Rank: 3 of 4 | TID: 22768
+[Master] Rank: 0 of 4 | TID: 10568
+Готово.
+
+
+--- run 1 ---
+[Master] Rank: 0 of 4 | TID: 8884
+[Worker] Rank: 3 of 4 | TID: 21688
+[Worker] Rank: 1 of 4 | TID: 8884
+[Worker] Rank: 2 of 4 | TID: 23172
+--- run 2 ---
+[Master] Rank: 0 of 4 | TID: 17280
+[Worker] Rank: 3 of 4 | TID: 20716
+[Worker] Rank: 1 of 4 | TID: 17280
+[Worker] Rank: 2 of 4 | TID: 5540
+--- run 3 ---
+[Master] Rank: 0 of 4 | TID: 4048
+[Worker] Rank: 3 of 4 | TID: 22712
+[Worker] Rank: 1 of 4 | TID: 4048
+[Worker] Rank: 2 of 4 | TID: 16884
+--- run 4 ---
+[Master] Rank: 0 of 4 | TID: 23396
+[Worker] Rank: 3 of 4 | TID: 20796
+[Worker] Rank: 1 of 4 | TID: 23396
+[Worker] Rank: 2 of 4 | TID: 13460
+--- run 5 ---
+[Master] Rank: 0 of 4 | TID: 9084
+[Worker] Rank: 3 of 4 | TID: 12932
+[Worker] Rank: 1 of 4 | TID: 9084
+[Worker] Rank: 2 of 4 | TID: 21436
+--- run 6 ---
+[Master] Rank: 0 of 4 | TID: 18728
+[Worker] Rank: 3 of 4 | TID: 19648
+[Worker] Rank: 1 of 4 | TID: 18728
+[Worker] Rank: 2 of 4 | TID: 16540
+--- run 7 ---
+[Master] Rank: 0 of 4 | TID: 16124
+[Worker] Rank: 3 of 4 | TID: 1460
+[Worker] Rank: 1 of 4 | TID: 16124
+[Worker] Rank: 2 of 4 | TID: 17052
+--- run 8 ---
+[Master] Rank: 0 of 4 | TID: 3740
+[Worker] Rank: 3 of 4 | TID: 17884
+[Worker] Rank: 1 of 4 | TID: 3740
+[Worker] Rank: 2 of 4 | TID: 14468
+--- run 9 ---
+[Master] Rank: 0 of 4 | TID: 19052
+[Worker] Rank: 3 of 4 | TID: 19968
+[Worker] Rank: 1 of 4 | TID: 19052
+[Worker] Rank: 2 of 4 | TID: 17484
+--- run 10 ---
+[Master] Rank: 0 of 4 | TID: 420
+[Worker] Rank: 3 of 4 | TID: 15352
+[Worker] Rank: 1 of 4 | TID: 420
+[Worker] Rank: 2 of 4 | TID: 20108
+
+P, Time(sec)
+1,0.000605
+2,0.001858
+4,0.003031
+8,0.003560
+16,0.004695
+32,0.006161
+64,0.009022
+
+
+For the next part i changed this part of code
+    if heavy:
+        total = 0.0
+        for _ in range(50_000_000): #was 2_000_000
+            total += math.sqrt(total + 1)
+
+output:
+C:\Users\user\PycharmProjects\PythonProject\.venv\Scripts\python.exe C:\Users\user\PycharmProjects\PythonProject\lab1.py 
+=== TASK 1.3: CPU saturation (следи за монитором ресурсов!) ===
+[Worker] Rank: 2 of 4 | TID: 2228
+[Master] Rank: 0 of 4 | TID: 18568
+[Worker] Rank: 1 of 4 | TID: 22352
+[Worker] Rank: 3 of 4 | TID: 4476
+Готово.
+
+Process finished with exit code 0
+
+ЦП
+
+	AMD Ryzen 5 4600H with Radeon Graphics 
+
+	Базовая скорость:	3,00 ГГц
+	Сокетов:	1
+	Ядра:	6
+	Логических процессоров:	12
+	Виртуализация:	Включено
+	Кэш L1:	384 КБ
+	Кэш L2:	3,0 МБ
+	Кэш L3:	8,0 МБ
+
+	Использование	13%
+	Скорость	3,48 ГГц
+	Время работы	33:02:41:53
+	Процессы	219
+	Потоки	3147
+	Дескрипторы	103259
+
+
+
+(all code i used here are ai generated by cloude code ai)
