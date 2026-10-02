@@ -1,0 +1,264 @@
+Microsoft Windows [Version 10.0.19045.6691]
+(c) Корпорация Майкрософт (Microsoft Corporation). Все права защищены.
+
+C:\Users\user>python --version
+Python 3.13.15
+
+C:\Users\user>cd %USERPROFILE%\Desktop
+
+C:\Users\user\Desktop>mkdir lab
+
+C:\Users\user\Desktop>cd lab
+
+C:\Users\user\Desktop\lab>python -m venv lab_env
+
+C:\Users\user\Desktop\lab>lab_env\Scripts\activate
+
+(lab_env) C:\Users\user\Desktop\lab>pip install numpy numba matplotlib
+Collecting numpy
+  Downloading numpy-2.5.3-cp313-cp313-win_amd64.whl.metadata (6.6 kB)
+......
+Successfully installed...
+
+(lab_env) C:\Users\user\Desktop\lab>python env_check.py
+OS: Windows-10-10.0.19045-SP0
+Processor: AMD64 Family 23 Model 96 Stepping 1, AuthenticAMD
+Python: 3.13.15
+NumPy: 2.5.3
+Numba: 0.68.0
+Matplotlib: 3.11.2
+os.cpu_count(): 12
+NUMBA_NUM_THREADS: 12
+
+
+####################################################################################
+
+My (env_check.py) file
+import os, platform, sys
+import numpy, numba, matplotlib
+
+print("OS:", platform.platform())
+print("Processor:", platform.processor())
+print("Python:", sys.version.split()[0])
+print("NumPy:", numpy.__version__)
+print("Numba:", numba.__version__)
+print("Matplotlib:", matplotlib.__version__)
+print("os.cpu_count():", os.cpu_count())
+print("NUMBA_NUM_THREADS:", numba.config.NUMBA_NUM_THREADS)
+
+####################################################################################
+
+(lab_env) C:\Users\user\Desktop\lab>python challenge1.py
+Hardware Threads Detected: 12
+Threads    | Time (s)     | Speedup    | Efficiency (%)
+-------------------------------------------------------
+1          | 2.2275       | 1.00      x | 100.0
+2          | 1.1137       | 2.00      x | 100.0
+4          | 0.5622       | 3.96      x | 99.1
+8          | 0.4979       | 4.47      x | 55.9
+12         | 0.3393       | 6.57      x | 54.7
+
+####################################################################################
+
+B. Why is the warm-up call required?
+@njit compiles the function only during the first call. This first call includes type checking and generating machine code with LLVM, which takes extra time and is not part of the algorithm.
+Without the warm-up, this compilation time would be included in the first measured run (1-thread baseline). This would make T₁ too large and the speedup look higher than it really is.
+The warm-up call with a small input (10_000) compiles the function and starts the thread pool. After that, the benchmark measures only the actual execution time.
+C. Did efficiency stay at 100%?
+No. Efficiency was close to 100% from 1 to 4 threads (99.1% at 4 threads). At 8 threads it dropped to 55.9%, and at 12 threads it was 54.7%. The speedup at 12 threads was 6.57x instead of the ideal 12x.
+Amdahl's Law is not the main reason. The serial part is only about 0.3%, so Amdahl's Law predicts about 11.6x speedup with 12 threads. The actual speedup is 6.57x, so the main reason is related to the CPU hardware.
+Physical cores and SMT. The Ryzen 5 4600H has 6 physical cores and 12 logical threads. Performance is almost ideal up to 4 threads. After 6 threads, multiple threads have to share the same physical cores using SMT. A second thread on a core does not give the same performance as a new physical core. This helps explain why the speedup at 12 threads is only 6.57x.
+Memory contention. This benchmark does not use arrays, so memory contention is not an important factor here.
+CPU frequency. When all CPU cores are working, a laptop CPU can reduce its clock speed because of power and temperature limits. This can reduce performance. CPU frequency was not measured, so this is only a possible factor.
+Parallel overhead. Thread creation and synchronization add some overhead, but it is small compared with the total runtime of about 2 seconds.
+D. Why does inside_circle += 1 not corrupt the count?
+Numba treats inside_circle += 1 inside prange as a reduction operation.
+Each thread has its own copy of inside_circle, starting from 0. The threads update their own copies, so they do not write to the same memory at the same time. Therefore, there is no race condition.
+At the end of the loop, Numba adds all the partial results together to get the final count.
+This works similarly to the OpenMP reduction(+:inside_circle) clause.
+
+####################################################################################
+
+(lab_env) C:\Users\user\Desktop\lab>python challenge2.py
+Row-Parallel Render Time: 0.891 s
+Column-Parallel Render Time: 0.842 s
+Saved image: mandelbrot_output.png
+
+(lab_env) C:\Users\user\Desktop\lab>dir mandelbrot_output.png
+ Том в устройстве C имеет метку Windows 10
+ Серийный номер тома: 687F-748B
+
+ Содержимое папки C:\Users\user\Desktop\lab
+
+02.10.2026  15:19           480 628 mandelbrot_output.png
+               1 файлов        480 628 байт
+               0 папок  430 435 782 656 байт свободно
+
+####################################################################################
+
+challenge2.py file
+
+import time
+import numpy as np
+import matplotlib.pyplot as plt
+from numba import njit, prange
+
+@njit(parallel=True)
+def render_mandelbrot_rows(h, w, max_iter):
+    img = np.zeros((h, w), dtype=np.int32)
+    # Row-parallel loop
+    for r in prange(h):
+        cy = -1.2 + (r / h) * 2.4
+        for c in range(w):
+            cx = -2.0 + (c / w) * 2.5
+            z_real, z_imag = 0.0, 0.0
+            it = 0
+            while (z_real * z_real + z_imag * z_imag <= 4.0) and (it < max_iter):
+                next_real = z_real * z_real - z_imag * z_imag + cx
+                z_imag = 2.0 * z_real * z_imag + cy
+                z_real = next_real
+                it += 1
+            img[r, c] = it
+    return img
+
+@njit(parallel=True)
+def render_mandelbrot_cols(h, w, max_iter):
+    img = np.zeros((h, w), dtype=np.int32)
+    # Column-parallel loop (swapped iteration axis)
+    for c in prange(w):
+        cx = -2.0 + (c / w) * 2.5
+        for r in range(h):
+            cy = -1.2 + (r / h) * 2.4
+            z_real, z_imag = 0.0, 0.0
+            it = 0
+            while (z_real * z_real + z_imag * z_imag <= 4.0) and (it < max_iter):
+                next_real = z_real * z_real - z_imag * z_imag + cx
+                z_imag = 2.0 * z_real * z_imag + cy
+                z_real = next_real
+                it += 1
+            img[r, c] = it
+    return img
+
+# Warmup JIT
+_ = render_mandelbrot_rows(100, 100, 50)
+_ = render_mandelbrot_cols(100, 100, 50)
+
+H, W, MAX_IT = 2500, 2500, 1000
+
+t0 = time.perf_counter()
+grid_rows = render_mandelbrot_rows(H, W, MAX_IT)
+t_rows = time.perf_counter() - t0
+
+t1 = time.perf_counter()
+grid_cols = render_mandelbrot_cols(H, W, MAX_IT)
+t_cols = time.perf_counter() - t1
+
+print(f"Row-Parallel Render Time: {t_rows:.3f} s")
+print(f"Column-Parallel Render Time: {t_cols:.3f} s")
+
+# Save visual artifact
+plt.figure(figsize=(8, 8))
+plt.imshow(grid_rows, cmap='magma', extent=[-2.0, 0.5, -1.2, 1.2])
+plt.title(f"Mandelbrot {H}x{W} (Render: {t_rows:.2f}s)")
+plt.axis('off')
+plt.savefig('mandelbrot_output.png', dpi=300, bbox_inches='tight')
+print("Saved image: mandelbrot_output.png")
+
+####################################################################################
+
+A. Compare t_rows vs t_cols.
+On my machine, the column version was slightly faster: t_cols = 0.842 s, while t_rows = 0.891 s. This is about 5.8% faster, with a ratio of 1.06.
+The difference is small because each version was tested only once, so this result is not very strong. Normally, the row version should be faster because NumPy uses row-major order. However, the measured results do not show a clear disadvantage for the column version.
+One possible reason is that most of the time is spent on calculations, not memory writes. Each pixel can require up to 1000 iterations, but only one 4-byte value is written. Another possible reason is that the two versions distribute the more difficult pixels differently between threads. However, I did not measure the workload of each thread, so this is only a possible explanation.
+B. C-contiguous layout and cache lines.
+NumPy arrays use C-contiguous (row-major) layout. This means that img[r, c] and img[r, c+1] are next to each other in memory. One row is stored as one continuous block of memory.
+A cache line is usually 64 bytes, so it can contain 16 int32 values.
+In the row version, each thread writes complete rows one after another. This gives good memory locality, and different threads mostly work with different parts of memory. Cache lines can be shared only near the boundaries between row blocks.
+In the column version, a thread writes img[r, c] for different values of r. The distance between two writes is w × 4 = 10,000 bytes. This means that almost every write uses a different cache line, so memory locality is worse.
+Also, neighbouring columns can be processed by different threads and can belong to the same cache line. This can cause false sharing, where cache lines are repeatedly transferred between CPU cores. With continuous blocks of columns, this mainly happens near the boundaries between thread blocks.
+However, in this lab, the calculations for each pixel take much more time than the memory write, so the effect is small.
+C. Load imbalance and dynamic scheduling.
+Mandelbrot pixels can require very different amounts of work. Some points leave the set after only a few iterations, while points inside the set can require all 1000 iterations.
+The top 20% of rows, given to thread 0, are mostly outside the set, so they finish quickly. The center 20% of rows, given to thread 2, contain much more of the set, so many pixels require all 1000 iterations.
+With the default static scheduling, each thread gets a fixed block of rows. Thread 0 can finish early and then wait at the end of the loop while thread 2 is still working. The total time depends on the slowest thread, so some CPU time is wasted.
+With OpenMP dynamic scheduling (schedule(dynamic, chunk)), the rows are divided into smaller chunks. When a thread finishes its current chunk, it gets another one. Threads that finish easy rows can therefore continue working on other chunks. This keeps the threads busy for longer.
+The disadvantage is a small extra overhead because the threads need to get new chunks during execution.
+D. Output image.
+mandelbrot_output.png was generated successfully (480,628 bytes) and is attached to the task sheet.
+
+####################################################################################
+
+(lab_env) C:\Users\user\Desktop\lab>python challenge3.py
+Heat Diffusion Complete: 1.004 s
+Throughput: 672.30 Megacells/sec
+
+####################################################################################
+
+challenge3_f32.py file
+
+import time
+import numpy as np
+from numba import njit, prange
+
+@njit(parallel=True)
+def heat_step(u, u_next, alpha=0.20):
+    rows, cols = u.shape
+    for i in prange(1, rows - 1):
+        for j in range(1, cols - 1):
+            u_next[i, j] = u[i, j] + alpha * (
+                u[i+1, j] + u[i-1, j] + u[i, j+1] + u[i, j-1] - 4.0 * u[i, j]
+            )
+
+GRID_SIZE = 1500
+STEPS = 300
+
+u = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)   # CHANGED
+u_next = np.zeros_like(u)
+
+# Dirichlet Boundary conditions: Top & Left walls maintained at 100°C
+u[0, :] = 100.0
+u[:, 0] = 100.0
+u_next[0, :] = 100.0
+u_next[:, 0] = 100.0
+
+# Warmup
+heat_step(u, u_next)
+
+# Benchmark Execution
+start = time.perf_counter()
+for step in range(STEPS):
+    heat_step(u, u_next)
+    # Pointer swap (avoids array allocation copies)
+    u, u_next = u_next, u
+elapsed = time.perf_counter() - start
+
+cells_per_sec = (GRID_SIZE * GRID_SIZE * STEPS) / elapsed / 1e6
+print(f"Heat Diffusion Complete: {elapsed:.3f} s")
+print(f"Throughput: {cells_per_sec:.2f} Megacells/sec")
+
+####################################################################################
+
+(lab_env) C:\Users\user\Desktop\lab>python challenge3_f32.py
+Heat Diffusion Complete: 0.509 s
+Throughput: 1324.84 Megacells/sec
+
+####################################################################################
+
+A. Benchmark runtime and throughput (float64).
+Runtime was 1.004 s and throughput was 672.30 Megacells/sec. This was measured with 12 threads after the JIT warm-up.
+B. Effect of float64 → float32.
+The runtime decreased from 1.004 s to 0.509 s. This is a 1.97x speedup. Throughput increased from 672.30 to 1324.84 Megacells/sec.
+Why does it help so much? Each grid has 1500 × 1500 elements. Two grids use about 36 MB with float64 and about 18 MB with float32. The CPU has only 8 MB of L3 cache, so the grids do not fit in the cache. The program therefore needs to load the data from main memory at every time step.
+The stencil does not perform many calculations for each cell. Because of this, the program spends a lot of time moving data rather than doing calculations. Using float32 cuts the data size in half, so less data needs to be moved. Also, a 64-byte cache line can hold 16 float32 values instead of 8 float64 values.
+Why is it not mainly about computation? The number of calculations per cell stays the same for both data types. The measured speedup is 1.97x, which is almost exactly 2x. This matches the reduction in data size and suggests that the program is mainly limited by memory speed. I did not measure SIMD performance separately, so I cannot say how much of the improvement comes from vectorization.
+C. Memory Roofline Model.
+The Roofline model says that performance is limited by either computing power or memory bandwidth. It can be written as P = min(P_peak, I × B), where P_peak is the maximum computing performance, B is memory bandwidth, and I is the number of floating-point operations per byte of data moved from memory.
+The 5-point stencil performs about 7 floating-point operations per cell but needs at least 16 bytes of data movement per cell in float64. This gives a low arithmetic intensity, so the program is mainly limited by memory bandwidth rather than CPU computing power.
+Adding more CPU cores increases the available computing power, but all cores still share the same memory system. Once the memory bandwidth is fully used, additional cores have to wait for data. Because of this, doubling the number of cores does not necessarily give 2x better performance.
+Performance can be improved by moving less data, for example by using float32, or by reusing data in the cache.
+In this lab, I measured thread scaling only for Challenge 1, not for the stencil. Therefore, the explanation about stencil scaling is based on the Roofline model, not on my own thread-scaling measurements.
+
+####################################################################################
+
+ALL CODING GENERATED/MDIFIED BY CLODE.AI
+ANSWERS WERE WRITEN BY ME BUT PARAPHRAZED BY CHATGPT
