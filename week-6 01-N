@@ -1,0 +1,714 @@
+I used chat GPT for coding and to write a report for this
+
+##########################################################################################################
+
+# Laboratory Report: Applied Massive Parallelism — CUDA Python, Thread Geometries, and Hardware Latency Pitfalls
+
+## 1. Objective
+
+The objective of this laboratory work was to investigate GPU computing using CUDA Python and Numba. The experiment focused on hardware inspection, CPU and GPU performance comparison, CUDA thread geometry, safe memory access, race conditions, atomic operations, and two-dimensional GPU processing.
+
+The main goals were:
+
+- Identify the GPU hardware and its CUDA properties.
+- Compare CPU execution time with GPU execution time.
+- Investigate the effect of data transfer overhead on GPU performance.
+- Understand CUDA thread and block indexing.
+- Prevent out-of-bounds memory access using boundary checks.
+- Understand race conditions and the purpose of atomic operations.
+- Configure a two-dimensional CUDA grid for matrix processing.
+- Generate a verification checksum for the completed experiment.
+
+## 2. Hardware and Software Environment
+
+### 2.1. GPU hardware inspection
+
+The GPU environment was inspected using the following command:
+
+```bash
+!nvidia-smi
+```
+
+The following hardware information was obtained:
+
+| Parameter | Observed value |
+|---|---|
+| NVIDIA Driver Version | 580.82.07 |
+| CUDA Version Supported by Driver | 13.0 |
+| GPU Model | NVIDIA Tesla T4 |
+| Total GPU Memory | 15360 MiB |
+| Compute Capability | 7.5 |
+| Maximum Threads per Block | 1024 |
+| Warp Size | 32 |
+| Maximum Block Dimensions | 1024 × 1024 × 64 |
+
+The Python hardware inspection was performed using Numba:
+
+```python
+from numba import cuda
+
+device = cuda.get_current_device()
+
+print(f"Device Name: {device.name.decode('utf-8')}")
+print(f"Compute Capability: {device.compute_capability}")
+print(f"Max Threads Per Block: {device.MAX_THREADS_PER_BLOCK}")
+print(f"Warp Size: {device.WARP_SIZE}")
+print(
+    f"Max Block Dimensions: "
+    f"{device.MAX_BLOCK_DIM_X}, "
+    f"{device.MAX_BLOCK_DIM_Y}, "
+    f"{device.MAX_BLOCK_DIM_Z}"
+)
+```
+
+The observed output was:
+
+```text
+Device Name: Tesla T4
+Compute Capability: (7, 5)
+Max Threads Per Block: 1024
+Warp Size: 32
+Max Block Dimensions: 1024 1024 64
+```
+
+The GPU was successfully detected by Numba.
+
+### 2.2. Hardware observations
+
+The NVIDIA Tesla T4 supports CUDA parallel execution. Its maximum block size is 1024 threads, and its warp size is 32 threads.
+
+A warp is a group of 32 threads scheduled together by the GPU. Thread and block dimensions determine how work is distributed across the GPU execution hardware.
+
+The GPU was available for computation, and the reported memory usage at the time of inspection was 0 MiB.
+
+The multiprocessor count was not recorded in the available output.
+
+## 3. CPU and GPU Performance Comparison
+
+### 3.1. CPU implementation
+
+The CPU implementation doubled every element of an input array using a Python loop.
+
+```python
+import numpy as np
+import time
+from numba import cuda
+
+def double_cpu_pure(arr):
+    out = np.empty_like(arr)
+
+    for i in range(len(arr)):
+        out[i] = arr[i] * 2.0
+
+    return out
+```
+
+### 3.2. GPU implementation
+
+The GPU implementation used a CUDA kernel. Each thread processed one array element.
+
+```python
+@cuda.jit
+def double_gpu_kernel(d_in, d_out):
+    idx = cuda.grid(1)
+
+    if idx < d_in.shape[0]:
+        d_out[idx] = d_in[idx] * 2.0
+```
+
+The expression `cuda.grid(1)` calculates the global one-dimensional thread index. The boundary condition ensures that a thread accesses the array only when its index is valid.
+
+### 3.3. Experimental measurements
+
+The following values were measured in Google Colab on the Tesla T4 GPU. All times are in milliseconds.
+
+| Array size (N) | CPU Time (ms) | GPU Total (ms) | GPU Kernel Only (ms) | Faster implementation |
+|---:|---:|---:|---:|---|
+| 100 | 0.053518 | 0.879426 | 0.122303 | CPU |
+| 1,000 | 0.252331 | 0.559589 | 0.062138 | CPU |
+| 10,000 | 2.530065 | 0.507736 | 0.058302 | GPU |
+| 100,000 | 28.737729 | 0.734226 | 0.077617 | GPU |
+| 1,000,000 | 461.287469 | 3.106632 | 0.156721 | GPU |
+| 5,000,000 | Not measured | 38.722286 | 0.329987 | CPU not measured |
+| 10,000,000 | Not measured | 40.648532 | 0.514540 | CPU not measured |
+
+For array sizes of 5,000,000 and 10,000,000 elements, the CPU measurement was skipped. Therefore, a CPU-versus-GPU winner cannot be determined from the available measurements for those two sizes.
+
+### 3.4. Analysis Question 1: What is the empirical crossover point N*?
+
+The empirical crossover point was:
+
+**N* = 10,000 elements.**
+
+At N = 100 and N = 1,000, the CPU was faster when the total GPU time, including data transfers, was considered.
+
+At N = 10,000, the GPU total time became lower than the CPU time:
+
+- CPU time: 2.530065 ms
+- GPU total time: 0.507736 ms
+
+The GPU was approximately 4.98 times faster than the CPU at N = 10,000 when comparing total measured execution times.
+
+This crossover demonstrates that GPU acceleration becomes beneficial when the workload is large enough to compensate for GPU launch and data transfer overhead.
+
+### 3.5. Analysis Question 2: Why was GPU Total Time slower at N = 100?
+
+At N = 100, the measured times were:
+
+- CPU time: 0.053518 ms
+- GPU total time: 0.879426 ms
+- GPU kernel-only time: 0.122303 ms
+
+The CPU was faster because the workload was too small to justify the overhead of GPU execution.
+
+The total GPU measurement included transferring the input array from host memory to device memory, allocating device output memory, launching the kernel, copying the result back to the host, and synchronizing execution.
+
+The kernel-only measurement excluded the main host-to-device and device-to-host transfers, but it still included timing and kernel-launch overhead associated with the measurement method.
+
+The difference between GPU total time and GPU kernel-only time was:
+
+0.879426 − 0.122303 = 0.757123 ms.
+
+Approximately 86.1% of the measured GPU total time was outside the kernel-only interval:
+
+(0.757123 / 0.879426) × 100 ≈ 86.1%.
+
+Therefore, the experiment demonstrates that transfer and other execution overheads dominated the small workload. The measured data does not support the claim that more than 95% of the total time was outside the kernel-only interval.
+
+## 4. CUDA Thread Geometry and Boundary Memory Safety
+
+### 4.1. Task 3.1: Safe CUDA kernel launch
+
+The objective was to process an array of 1,000 elements using blocks of 256 threads while preventing out-of-bounds memory access.
+
+The following kernel was used:
+
+```python
+import numpy as np
+from numba import cuda
+
+@cuda.jit
+def safe_kernel(d_arr, N):
+    idx = cuda.grid(1)
+
+    if idx < N:
+        d_arr[idx] = 999.0
+```
+
+The launch configuration and validation code were:
+
+```python
+N = 1000
+
+h_arr = np.zeros(N, dtype=np.float32)
+d_arr = cuda.to_device(h_arr)
+
+threads_per_block = 256
+blocks_per_grid = (
+    N + threads_per_block - 1
+) // threads_per_block
+
+print("Blocks:", blocks_per_grid)
+print("Threads launched:", blocks_per_grid * threads_per_block)
+
+safe_kernel[blocks_per_grid, threads_per_block](d_arr, N)
+
+cuda.synchronize()
+
+h_result = d_arr.copy_to_host()
+
+print("Array size:", len(h_result))
+print("First element:", h_result[0])
+print("Last element:", h_result[-1])
+print("All elements updated:", np.all(h_result == 999.0))
+```
+
+The observed output was:
+
+```text
+Blocks: 4
+Threads launched: 1024
+Array size: 1000
+First element: 999.0
+Last element: 999.0
+All elements updated: True
+```
+
+### 4.2. Thread geometry calculations
+
+The number of blocks was calculated using ceiling division:
+
+B = ceil(N / threads_per_block)
+
+B = ceil(1000 / 256) = 4.
+
+The total number of launched threads was:
+
+4 × 256 = 1024.
+
+The number of extra threads was:
+
+1024 − 1000 = 24.
+
+Therefore:
+
+- Total blocks: 4
+- Threads per block: 256
+- Total launched threads: 1024
+- Active threads: 1000
+- Threads guarded by the boundary condition: 24
+
+The kernel successfully updated every element of the array.
+
+### 4.3. Task 3.1: Why is a boundary check necessary?
+
+A CUDA grid often launches more threads than the number of array elements because blocks have a fixed size. Without a boundary check, extra threads may access memory outside the allocated array.
+
+For example, with 1,000 elements and 1,024 launched threads, global thread IDs 1000 through 1023 do not correspond to valid array indices.
+
+The condition `if idx < N` prevents these threads from accessing invalid elements.
+
+### 4.4. Missing-guard experiment
+
+The defective kernel provided in the laboratory instructions was:
+
+```python
+@cuda.jit
+def defective_kernel(d_arr):
+    idx = cuda.grid(1)
+    d_arr[idx] = 999.0
+```
+
+This kernel does not check whether `idx` is within the array bounds.
+
+The expected risk is an out-of-bounds GPU memory write. Depending on the runtime and memory layout, such an error may cause an illegal memory access or corrupt adjacent device memory. It may not produce a normal Python `IndexError`.
+
+The exact output from running this defective kernel was not recorded in the available experiment results. Therefore, no specific crash or corruption result is claimed here.
+
+### 4.5. Task 3.2: Spatial thread coordinate inspector
+
+The second experiment used N = 37 and 8 threads per block.
+
+The diagnostic kernel was:
+
+```python
+@cuda.jit
+def inspect_threads_kernel(
+    log_block,
+    log_thread,
+    log_global,
+    log_active,
+    N
+):
+    t_idx = cuda.threadIdx.x
+    b_idx = cuda.blockIdx.x
+    g_idx = cuda.grid(1)
+
+    if g_idx < log_block.shape[0]:
+        log_block[g_idx] = b_idx
+        log_thread[g_idx] = t_idx
+        log_global[g_idx] = g_idx
+        log_active[g_idx] = 1 if g_idx < N else 0
+```
+
+The configuration and logging code were:
+
+```python
+N = 37
+threads_per_block = 8
+
+blocks_per_grid = (
+    N + threads_per_block - 1
+) // threads_per_block
+
+log_b = cuda.device_array(
+    blocks_per_grid * threads_per_block,
+    dtype=np.int32
+)
+log_t = cuda.device_array(
+    blocks_per_grid * threads_per_block,
+    dtype=np.int32
+)
+log_g = cuda.device_array(
+    blocks_per_grid * threads_per_block,
+    dtype=np.int32
+)
+log_a = cuda.device_array(
+    blocks_per_grid * threads_per_block,
+    dtype=np.int32
+)
+
+inspect_threads_kernel[
+    blocks_per_grid,
+    threads_per_block
+](log_b, log_t, log_g, log_a, N)
+
+cuda.synchronize()
+
+for i in range(32, 40):
+    status = "ACTIVE" if log_a[i] == 1 else "IDLE (GUARDED)"
+    print(
+        f"{log_g[i]} {log_b[i]} "
+        f"{log_t[i]} {status}"
+    )
+```
+
+The observed boundary output was:
+
+```text
+Blocks: 4
+Threads launched: 1024
+Global ID | Block ID | Thread ID | Status
+32 4 0 ACTIVE
+33 4 1 ACTIVE
+34 4 2 ACTIVE
+35 4 3 ACTIVE
+36 4 4 ACTIVE
+37 4 5 IDLE (GUARDED)
+38 4 6 IDLE (GUARDED)
+39 4 7 IDLE (GUARDED)
+```
+
+The first two lines concerning `Blocks: 4` and `Threads launched: 1024` came from the preceding N = 1,000 safe-kernel experiment. The N = 37 configuration itself requires 5 blocks and 40 threads.
+
+The diagnostic kernel also generated this warning:
+
+```text
+NumbaPerformanceWarning: Grid size 5 will likely result in GPU under-utilization due to low occupancy.
+```
+
+This was a performance warning, not a kernel correctness error.
+
+### 4.6. Mandatory calculations for N = 37
+
+The number of blocks was:
+
+B = ceil(37 / 8) = 5.
+
+The total number of launched threads was:
+
+5 × 8 = 40.
+
+The number of active threads was 37.
+
+The number of guarded threads was:
+
+40 − 37 = 3.
+
+The final values are:
+
+- Total blocks allocated: 5
+- Total hardware threads launched: 40
+- Active working threads: 37
+- Idle guarded threads: 3
+
+### 4.7. Global, block, and thread IDs
+
+The global thread index is calculated as:
+
+Global ID = Block ID × Threads Per Block + Thread ID.
+
+For Block ID = 4 and Thread ID = 4:
+
+Global ID = 4 × 8 + 4 = 36.
+
+Index 36 is valid because the last element of an array containing 37 elements has index 36.
+
+Global IDs 37, 38, and 39 are outside the valid range. They must not process array elements.
+
+## 5. Race Conditions and Parallel Reduction
+
+### 5.1. Task 4.1: Naive reduction kernel
+
+The naive kernel attempts to add values from multiple GPU threads into one shared scalar location.
+
+```python
+@cuda.jit
+def naive_sum_kernel(d_arr, d_total):
+    idx = cuda.grid(1)
+
+    if idx < d_arr.shape[0]:
+        d_total[0] += d_arr[idx]
+```
+
+The problem is that multiple threads may read the same old value of `d_total[0]`, independently add their input values, and write the results back. Some updates can be lost.
+
+This is called a race condition.
+
+### 5.2. Correct atomic reduction
+
+The atomic version uses `cuda.atomic.add`:
+
+```python
+@cuda.jit
+def atomic_sum_kernel(d_arr, d_total):
+    idx = cuda.grid(1)
+
+    if idx < d_arr.shape[0]:
+        cuda.atomic.add(d_total, 0, d_arr[idx])
+```
+
+An atomic addition ensures that each update to the shared scalar is performed without conflicting with another update to the same memory location.
+
+### 5.3. Experimental setup
+
+The experiment uses an array of 50,000 ones. The expected sum is:
+
+Expected Sum = 50,000 × 1.0 = 50,000.0.
+
+The naive kernel must be run for five consecutive trials, and each actual output must be recorded.
+
+| Trial | Target sum | Naive kernel output | Deviation / lost updates |
+|---:|---:|---:|---:|
+| 1 | 50000.0 | Not recorded | Not calculated |
+| 2 | 50000.0 | Not recorded | Not calculated |
+| 3 | 50000.0 | Not recorded | Not calculated |
+| 4 | 50000.0 | Not recorded | Not calculated |
+| 5 | 50000.0 | Not recorded | Not calculated |
+
+The five numerical outputs were not available in the supplied results. They must be filled in after running the experiment.
+
+The deviation for each trial can be calculated as:
+
+Deviation = Target Sum − Naive Kernel Output.
+
+### 5.4. Atomic sum output
+
+For an input array containing exactly 50,000 ones, the expected correct atomic sum is:
+
+**Atomic Sum Output = 50000.0.**
+
+This is the mathematically expected result, not a recorded runtime output from the current experiment.
+
+### 5.5. Why can atomic operations be slower?
+
+Atomic operations can reduce performance because updates to the same memory address must be serialized when multiple threads contend for that address.
+
+In this experiment, all threads update `d_total[0]`. This creates heavy contention for one memory location. Threads cannot all complete their updates independently at the same instant.
+
+The naive implementation may appear faster because it does not coordinate concurrent updates, but its result can be incorrect. The atomic implementation prioritizes correctness and ensures that updates are not lost.
+
+The actual naive and atomic kernel runtimes were not recorded in the available output and must be measured separately.
+
+## 6. Two-Dimensional Grid Processing
+
+### 6.1. Objective
+
+The objective of this section is to process a 1024 × 1024 matrix using a two-dimensional CUDA grid. Each GPU thread calculates the intensity of one pixel based on its Euclidean distance from the center.
+
+### 6.2. CUDA kernel
+
+```python
+import math
+import numpy as np
+from numba import cuda
+
+@cuda.jit
+def radial_vignette_2d(
+    d_canvas,
+    width,
+    height,
+    center_x,
+    center_y
+):
+    x, y = cuda.grid(2)
+
+    if x < width and y < height:
+        dx = float(x - center_x)
+        dy = float(y - center_y)
+
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        max_dist = math.sqrt(
+            float(center_x**2 + center_y**2)
+        )
+
+        intensity = 1.0 - (dist / max_dist)
+
+        if intensity < 0.0:
+            intensity = 0.0
+
+        d_canvas[y, x] = intensity
+```
+
+### 6.3. Grid configuration and execution
+
+```python
+WIDTH, HEIGHT = 1024, 1024
+
+canvas = np.zeros(
+    (HEIGHT, WIDTH),
+    dtype=np.float32
+)
+
+d_canvas = cuda.to_device(canvas)
+
+threads_2d = (16, 16)
+
+blocks_2d = (
+    (WIDTH + threads_2d[0] - 1)
+    // threads_2d[0],
+
+    (HEIGHT + threads_2d[1] - 1)
+    // threads_2d[1]
+)
+
+radial_vignette_2d[
+    blocks_2d,
+    threads_2d
+](
+    d_canvas,
+    WIDTH,
+    HEIGHT,
+    WIDTH // 2,
+    HEIGHT // 2
+)
+
+cuda.synchronize()
+
+result_canvas = d_canvas.copy_to_host()
+
+print(
+    f"Generated 2D matrix shape: "
+    f"{result_canvas.shape}. "
+    f"Center value: {result_canvas[512, 512]:.3f}"
+)
+
+print(
+    f"Outer corner value: "
+    f"{result_canvas[0, 0]:.3f}"
+)
+```
+
+### 6.4. Two-dimensional geometry calculations
+
+Each block contains:
+
+16 × 16 = 256 threads.
+
+The number of blocks along the X dimension is:
+
+Blocks X = 1024 / 16 = 64.
+
+The number of blocks along the Y dimension is:
+
+Blocks Y = 1024 / 16 = 64.
+
+The total number of blocks is:
+
+64 × 64 = 4096.
+
+The total number of launched threads is:
+
+4096 × 256 = 1,048,576.
+
+This exactly matches the number of matrix elements:
+
+1024 × 1024 = 1,048,576.
+
+### 6.5. Expected matrix values
+
+The center is configured as (512, 512).
+
+At the center:
+
+- dx = 0
+- dy = 0
+- Distance = 0
+- Intensity = 1 − 0 / max_distance = 1.0
+
+Therefore, the expected center value is:
+
+**result_canvas[512, 512] = 1.000**
+
+At the corner (0, 0), the distance is:
+
+sqrt(512² + 512²).
+
+This is the same distance used as `max_dist`, so the calculated intensity is zero.
+
+Therefore, the expected corner value is:
+
+**result_canvas[0, 0] = 0.000**
+
+These values follow mathematically from the implemented formula. The actual printed output was not included in the available experimental results.
+
+### 6.6. Mandatory 2D geometry verification
+
+- Blocks in X: 64
+- Blocks in Y: 64
+- Total blocks: 4096
+- Center pixel value (512, 512): expected 1.000
+- Outer corner value (0, 0): expected 0.000
+
+## 7. Final Verification Checksum
+
+The laboratory instructions require a checksum generated from the student ID, GPU name, a sample of the processed matrix, and the empirical crossover point.
+
+The provided checksum function is:
+
+```python
+import hashlib
+from numba import cuda
+
+def generate_lab_checksum(
+    student_id_str,
+    d_canvas,
+    exp_table_crossover
+):
+    h = hashlib.sha256()
+
+    h.update(student_id_str.strip().encode("utf-8"))
+    h.update(cuda.get_current_device().name)
+    h.update(
+        d_canvas.copy_to_host()[:10, :10].tobytes()
+    )
+    h.update(str(exp_table_crossover).encode("utf-8"))
+
+    digest = h.hexdigest()[:16].upper()
+
+    print("=" * 60)
+    print(f"OFFICIAL VERIFICATION CHECKSUM TOKEN: {digest}")
+    print("=" * 60)
+
+    return digest
+```
+
+The measured crossover point from this experiment is 10,000 elements.
+
+The final cell must be executed after the 2D matrix has been generated:
+
+```python
+STUDENT_ID = "REPLACE_WITH_YOUR_ACTUAL_STUDENT_ID"
+CROSSOVER_N = 10000
+
+generate_lab_checksum(
+    STUDENT_ID,
+    d_canvas,
+    CROSSOVER_N
+)
+```
+
+The placeholder must be replaced with the student's actual ID before running the cell.
+
+The checksum is unique to the supplied student ID and the actual contents of the processed GPU matrix. Therefore, a valid checksum token cannot be supplied without executing the function using the correct inputs.
+
+**Checksum token:** Not recorded in the available results. Paste the actual 16-character token after running the final cell.
+
+## 8. Conclusion
+
+This laboratory work demonstrated important characteristics of GPU programming using CUDA Python and Numba.
+
+First, hardware inspection confirmed that the experiment was performed on an NVIDIA Tesla T4 GPU with compute capability 7.5, a maximum of 1024 threads per block, and a warp size of 32 threads.
+
+Second, the CPU-versus-GPU benchmark showed that GPU acceleration does not automatically improve performance for small workloads. The empirical crossover point was 10,000 elements. At smaller sizes, GPU execution and data transfer overhead outweighed the benefits of parallel processing. At 10,000 elements and above, the measured GPU total time was lower than the CPU time for the sizes where CPU measurements were available.
+
+Third, the safe CUDA kernel correctly processed all 1,000 elements using four blocks of 256 threads. The boundary condition prevented 24 excess threads from accessing invalid array indices.
+
+The thread-coordinate experiment used 37 elements and 8 threads per block. It required five blocks and 40 threads, of which 37 were active and three were guarded. This demonstrated how global thread IDs map to block and thread coordinates.
+
+Fourth, the reduction example illustrated why unsynchronized concurrent updates can produce race conditions. Atomic operations provide a correct mechanism for updating a shared value, although contention can reduce performance.
+
+Finally, the two-dimensional vignette kernel demonstrated how a CUDA grid can map threads to matrix coordinates. The expected grid configuration was 64 × 64 blocks, with 256 threads per block, and the expected intensity values were 1.000 at the center and 0.000 at the outer corner.
+
+Overall, the experiment demonstrated that effective GPU programming requires appropriate workload size, correct thread geometry, safe memory access, synchronization, and careful measurement of both computation and data transfer overhead.
